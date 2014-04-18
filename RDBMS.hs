@@ -1,5 +1,6 @@
 module RDBMS where
 
+import Control.Monad.State 
 import qualified Data.List as L
 import qualified Data.Map as M
 
@@ -50,21 +51,21 @@ select t cs = SelectQuery t cs
 insert :: TableName -> Values -> Query
 insert t v = InsertQuery t v
 
-data QueryResults = SelectResults [Row] | InsertResults DB | Fail deriving (Show)
+data QueryResults = SelectResults [Row] | Success | Fail deriving (Show)
 
-getDB :: QueryResults -> DB
-getDB (InsertResults db) = db
+runQuery :: Query -> State DB QueryResults
+runQuery (SelectQuery tname scs) = do 
+                                      db <- get
+                                      let table = M.lookup tname (unDB db) in 
+                                          case table of
+                                            Just t -> return (SelectResults (selectFromTable t scs))
+                                            Nothing -> return Fail
 
-runQuery :: DB -> Query -> QueryResults
-runQuery db (SelectQuery tname scs) = case table of
-                                        Just t -> (SelectResults (selectFromTable t scs))
-                                        Nothing -> Fail
+runQuery (InsertQuery tname v) = do
+                                    db <- get
+                                    case table db of
+                                      Just _ ->  put (newDB db) >> return Success
+                                      Nothing -> return Fail
   where
-    table = M.lookup tname (unDB db)
-
-runQuery db (InsertQuery tname v) = case table of
-                                      Just _ ->  InsertResults newDB
-                                      Nothing -> Fail
-  where
-    table = M.lookup tname (unDB db)
-    newDB = (MkDB (M.adjust (\t -> insertIntoTable t v) tname (unDB db)))
+    table db = M.lookup tname (unDB db)
+    newDB db = (MkDB (M.adjust (\t -> insertIntoTable t v) tname (unDB db)))
