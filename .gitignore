@@ -2,3 +2,5 @@ Main
 *.hi
 *.o
 *.swp
+.cabal-sandbox
+cabal.sandbox.config
