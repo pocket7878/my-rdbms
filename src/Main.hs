@@ -6,8 +6,13 @@ import qualified Data.Map as M
 import qualified BTree as B
 import RDBMS 
 
+nameOption = ColumnOption (Just "Unnamed") False False
+emailOption = ColumnOption Nothing True True
+
 db :: DB
-db = createTable (emptyDB) "Student" [ColumnName "name", ColumnName "email", ColumnName "sub-email"]
+db = createTable (emptyDB) "Student" (M.fromList [((ColumnName "name"), nameOption),
+                                                ((ColumnName "email"), emailOption),
+                                                ((ColumnName "sub-email"), defaultOption)])
 
 query = (select "Student" [ColumnName "name", ColumnName "email"])
 
@@ -19,27 +24,18 @@ inserts root xs = L.foldl' (\t (k, v) -> B.insert t k v) root xs
 ntree = inserts root [("a", 1), ("b", 2), ("d", 3), ("c", 4), ("e", 5), ("f", 6), ("g", 7)]
 
 main :: IO ()
---main =  do 
---           evalStateT (do {
---                          insert "Student" (M.fromList [(ColumnName "name", "Satou"), (ColumnName "email", "hoge")]);
---                          insert "Student" (M.fromList [(ColumnName "name", "Tanaka"), (ColumnName "email", "moge")]);
---                          insert "Student" (M.fromList [(ColumnName "name", "Yamamoto"), (ColumnName "email", "yama"), (ColumnName "sub-email", "yama")]);
---                          liftIO $ putStrLn "Before update";
---                          results <- select "Student" [ColumnName "name"] Nothing;
---                          liftIO $ print results;
---                          update "Student" [SetToValue (ColumnName "name") (Just "Hoge")] Nothing;
---                          liftIO $ putStrLn "After update";
---                          results <- select "Student" [ColumnName "name"] Nothing;
---                          liftIO $ print results;
---                          return ()
---                          }) db
-main = do
-    print $ inserts root [("a", 1)]
-    print $ inserts root [("a", 1), ("b", 2), ("c", 3)]
-    print $ inserts root [("a", 1), ("b", 2), ("d", 3), ("c", 4)]
-    print $ inserts root [("a", 1), ("b", 2), ("d", 3), ("c", 4), ("e", 5)]
-    print $ inserts root [("a", 1), ("b", 2), ("d", 3), ("c", 4), ("e", 5), ("f", 6)]
-    print $ inserts root [("a", 1), ("b", 2), ("d", 3), ("c", 4), ("e", 5), ("f", 6), ("g", 7)]
-    print $ B.search ntree "a"
-    print $ B.search ntree "c"
-    print $ B.search ntree "g"
+main =  do 
+           evalStateT (do {
+                          insert "Student" (M.fromList [(ColumnName "name", Just "Satou"), (ColumnName "email", Just "hoge")]);
+                          insert "Student" (M.fromList [(ColumnName "email", Just "unnamed-user-email")]);
+                          insert "Student" (M.fromList [(ColumnName "name", Just "Tanaka"), (ColumnName "email", Just "moge")]);
+                          insert "Student" (M.fromList [(ColumnName "name", Just "Yamamoto"), (ColumnName "email", Just "yama"), (ColumnName "sub-email", Just "yama")]);
+                          liftIO $ putStrLn "Before update";
+                          results <- select "Student" [ColumnName "name"] Nothing;
+                          liftIO $ print results;
+                          update "Student" [SetToValue (ColumnName "name") (Just "Hoge")] Nothing;
+                          liftIO $ putStrLn "After update";
+                          results <- select "Student" [ColumnName "name"] Nothing;
+                          liftIO $ print results;
+                          return ()
+                          }) db

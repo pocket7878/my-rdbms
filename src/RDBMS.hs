@@ -6,20 +6,33 @@ import qualified Data.Map as M
 
 newtype ColumnName = ColumnName String deriving (Show, Eq, Ord)
 
-data ColumnOption = Default (Maybe String) | PrimaryKey | NotNULL deriving (Show, Eq)
+data ColumnOption = ColumnOption {
+                  _default :: (Maybe String)
+                  ,_nullable :: Bool
+                  ,_primary :: Bool}
+                  deriving (Show, Eq)
+
+defaultOption :: ColumnOption 
+defaultOption = ColumnOption Nothing True False
+
+--Nullableでないカラムにはデフォルト値としてNullは指定できない
+validateColumnOption :: ColumnOption -> Bool
+validateColumnOption c = case _default c of
+                           Just _ -> True
+                           Nothing -> not (_nullable c)
 
 fromColumnName :: ColumnName -> String
 fromColumnName (ColumnName s) = s
 
-data Column = Column ColumnName [ColumOption]
+type Column = M.Map ColumnName ColumnOption
 
 type TableName = String
 --最初はどのカラムもNullableということにしておく
 type Row = M.Map ColumnName (Maybe String)
---投入データは明示的にNullを指定しなくて良い。無いもんはない
-type Values = M.Map ColumnName String
 
-data Table = Table [ColumnName] [Row] deriving (Show)
+type Values = Row
+
+data Table = Table Column [Row] deriving (Show)
 
 newtype DB = MkDB (M.Map TableName Table) deriving (Show)
 
@@ -29,7 +42,7 @@ emptyDB = (MkDB M.empty)
 unDB :: DB -> M.Map TableName Table
 unDB (MkDB ts) = ts
 
-createTable :: DB -> TableName -> [ColumnName] -> DB
+createTable :: DB -> TableName -> Column -> DB
 createTable (MkDB ts) tname cs = (MkDB (M.insert tname (Table cs []) ts))
 
 -- Mapの形式を整える
@@ -39,11 +52,27 @@ standardizeMap m standard = newMap
     tmpMap = M.filterWithKey (\k v -> k `elem` standard) m
     newMap = L.foldl' (\m s ->  M.insert s (M.lookup s tmpMap) m) M.empty standard
 
+translateByKey :: (Ord a) => (a -> Maybe c) -> M.Map a b -> M.Map a c
+translateByKey f m = L.foldl' (\m k -> case f k of
+                                            Just v -> M.insert k v m
+                                            Nothing -> m) M.empty (M.keys m)
+
+fixValues :: Values -> Column -> Row
+fixValues v c = row
+  where
+    row = translateByKey (\k -> let option = (c M.! k) in
+                                  case (M.lookup k v) of
+                                    Just (Just s) -> (Just (Just s))
+                                    Just Nothing -> if (_nullable option)
+                                                      then Just Nothing
+                                                      else error ("Column " ++ (fromColumnName k) ++ " can't be NULL")
+                                    Nothing -> Just (_default option)) c
+
 -- Insert into Table
 insertIntoTable :: Table -> Values -> Table
 insertIntoTable (Table cs rs) v = (Table cs (insertRow : rs))
   where
-    insertRow = standardizeMap v cs
+    insertRow = fixValues v cs
 
 data QueryResults = SelectResults [Row] | Success | Fail deriving (Show)
 data SetTo = SetToValue ColumnName (Maybe String) | SetToColumn ColumnName ColumnName
@@ -73,7 +102,7 @@ filterRow rs w = case w of
 selectFromTable :: Table -> [ColumnName] -> Maybe WhereClause -> [Row]
 selectFromTable (Table cs rs) selectCs w = results
   where
-    newSelectCs = L.filter (\c -> c `elem` cs) selectCs
+    newSelectCs = L.filter (\c -> M.member c cs) selectCs
     results = L.map (\r -> M.filterWithKey (\k v -> k `elem` newSelectCs) r) $ filterRow rs w
 
 updateTable :: Table -> [SetTo] -> Maybe WhereClause -> Table
