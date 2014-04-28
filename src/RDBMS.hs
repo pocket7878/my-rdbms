@@ -6,8 +6,12 @@ import qualified Data.Map as M
 
 newtype ColumnName = ColumnName String deriving (Show, Eq, Ord)
 
+data ColumnOption = Default (Maybe String) | PrimaryKey | NotNULL deriving (Show, Eq)
+
 fromColumnName :: ColumnName -> String
 fromColumnName (ColumnName s) = s
+
+data Column = Column ColumnName [ColumOption]
 
 type TableName = String
 --最初はどのカラムもNullableということにしておく
