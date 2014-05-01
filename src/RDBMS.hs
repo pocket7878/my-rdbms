@@ -3,28 +3,84 @@ module RDBMS where
 import Control.Monad.State 
 import qualified Data.List as L
 import qualified Data.Map as M
+import qualified BTree as B
+import qualified Data.Maybe as Maybe
 
 newtype ColumnName = ColumnName String deriving (Show, Eq, Ord)
 
+--一次索引は行の番号を弾くことができる
+type PrimaryBIndex = B.BTree String Row
+--二次索引はPrimary Keyを示すことで間接的に行を弾くことができる
+type SecondaryBIndex = B.BTree String [String]
+
 data ColumnOption = ColumnOption {
-                  _default :: (Maybe String)
+                  _default :: (Maybe (Maybe String))
                   ,_nullable :: Bool
-                  ,_primary :: Bool}
-                  deriving (Show, Eq)
+                  } deriving (Show, Eq)
 
 defaultOption :: ColumnOption 
-defaultOption = ColumnOption Nothing True False
+defaultOption = ColumnOption Nothing True 
 
---Nullableでないカラムにはデフォルト値としてNullは指定できない
-validateColumnOption :: ColumnOption -> Bool
-validateColumnOption c = case _default c of
-                           Just _ -> True
-                           Nothing -> not (_nullable c)
+--Primary KeyはNot NULLでなければいけない,
+--Not NULLならばdefault値としてNULLは指定できない
+--default値を指定しないというのは可能（挿入時にユーザーが指定する必要がある)
+validatePrimaryColumnOption :: ColumnOption -> Bool
+validatePrimaryColumnOption c
+  | (_nullable c) = False
+  | otherwise = case (_default c) of
+                  Just (Just s) -> True
+                  Just Nothing -> False
+                  Nothing -> True
+
+--通常のカラムはNullableならば特に制約はない
+--Not NULLならばdefault値としてNULLは指定できない
+--default値を指定しないというのは可能（挿入時にユーザーが指定する必要がある)
+validateNormalColumnOption :: ColumnOption -> Bool
+validateNormalColumnOption c
+  | (_nullable c) = True
+  | otherwise = case (_default c) of
+                  Just (Just s) -> True
+                  Just Nothing -> False
+                  Nothing -> True
+
+validateColumnOption :: Column -> Bool
+validateColumnOption c = if isPrimary c
+                           then validatePrimaryColumnOption (_option c)
+                           else validateNormalColumnOption (_option c)
 
 fromColumnName :: ColumnName -> String
 fromColumnName (ColumnName s) = s
 
-type Column = M.Map ColumnName ColumnOption
+--思い切ってPrimaryなカラムと通常のカラムを分けた
+data Column = PColumn {
+            _cname :: ColumnName
+            ,_option :: ColumnOption
+            ,_pbtree_index :: PrimaryBIndex
+            }
+            | NColumn {
+                      _cname :: ColumnName
+                      ,_option :: ColumnOption
+                      ,_nbtree_index :: Maybe SecondaryBIndex
+              } deriving (Show)
+
+mkPColumn :: ColumnName -> ColumnOption -> Column
+mkPColumn cname coption = if validatePrimaryColumnOption coption
+                            then PColumn cname coption (B.empty 8)
+                            else error "Invalid primary key option"
+
+mkNColumn :: ColumnName -> ColumnOption -> Column
+mkNColumn cname coption = if validateNormalColumnOption coption
+                            then NColumn cname coption Nothing
+                            else error "Invalid normal column option"
+
+
+isPrimary :: Column -> Bool
+isPrimary (PColumn _ _ _) = True
+isPrimary _ = False
+
+--カラム名が同じカラムは同じと扱う
+instance Eq Column where
+    a == b = (_cname a) == (_cname b)
 
 type TableName = String
 --最初はどのカラムもNullableということにしておく
@@ -32,7 +88,7 @@ type Row = M.Map ColumnName (Maybe String)
 
 type Values = Row
 
-data Table = Table Column [Row] deriving (Show)
+data Table = Table (M.Map ColumnName Column) [Row] deriving (Show)
 
 newtype DB = MkDB (M.Map TableName Table) deriving (Show)
 
@@ -42,8 +98,17 @@ emptyDB = (MkDB M.empty)
 unDB :: DB -> M.Map TableName Table
 unDB (MkDB ts) = ts
 
-createTable :: DB -> TableName -> Column -> DB
-createTable (MkDB ts) tname cs = (MkDB (M.insert tname (Table cs []) ts))
+createTable :: DB -> TableName -> [Column] -> DB
+createTable (MkDB ts) tname cs = if primaryExists
+                                   then (MkDB (M.insert tname (Table columnMap []) ts))
+                                   else error "One more primary key need"
+  where
+    --すべてのカラムが正しいことは保証されている
+    primaryExists = L.any (\c -> isPrimary c) cs 
+    columnMap = L.foldl' (\m c -> M.insert (_cname c) c m) M.empty cs
+
+getColumn :: Table -> ColumnName -> Maybe Column
+getColumn (Table cs _) cname = M.lookup cname cs
 
 -- Mapの形式を整える
 standardizeMap :: (Ord a) => M.Map a b -> [a] -> M.Map a (Maybe b)
@@ -57,22 +122,40 @@ translateByKey f m = L.foldl' (\m k -> case f k of
                                             Just v -> M.insert k v m
                                             Nothing -> m) M.empty (M.keys m)
 
-fixValues :: Values -> Column -> Row
-fixValues v c = row
+translateByValue :: (Ord a) => (a -> b -> Maybe c) -> M.Map a b -> M.Map a c
+translateByValue f m = L.foldl' (\m (k,v) -> case f k v of
+                                            Just v -> M.insert k v m
+                                            Nothing -> m) M.empty (M.toList m)
+
+fixValues :: Values -> [Column] -> Row
+fixValues v cs = row
   where
-    row = translateByKey (\k -> let option = (c M.! k) in
-                                  case (M.lookup k v) of
-                                    Just (Just s) -> (Just (Just s))
-                                    Just Nothing -> if (_nullable option)
-                                                      then Just Nothing
-                                                      else error ("Column " ++ (fromColumnName k) ++ " can't be NULL")
-                                    Nothing -> Just (_default option)) c
+    row :: Row
+    row = L.foldl' (\r c -> 
+                   let option = (_option c) in
+                     case (M.lookup (_cname c) v) of
+                       Just (Just s) -> M.insert (_cname c) (Just s) r
+                       Just Nothing -> if (_nullable option)
+                                         then M.insert (_cname c) Nothing r 
+                                         else error ("Column " ++ (fromColumnName (_cname c)) ++ " can't be NULL")
+                       Nothing -> case (_default option) of
+                                    Just i -> M.insert (_cname c) i r
+                                    Nothing -> if (_nullable option)
+                                                 then M.insert (_cname c) Nothing r
+                                                 else error ("Column '" ++ (fromColumnName (_cname c)) ++ "' doesn't have a default value")) M.empty cs
 
 -- Insert into Table
 insertIntoTable :: Table -> Values -> Table
-insertIntoTable (Table cs rs) v = (Table cs (insertRow : rs))
+insertIntoTable (Table cs rs) v = case alreadyExists of
+                                    Just i -> error "Aleready exists"
+                                    Nothing -> (Table newCS (rs ++ [insertRow]))
   where
-    insertRow = fixValues v cs
+    insertRow = fixValues v (M.elems cs)
+    pKey = Maybe.fromJust $ L.find isPrimary (M.elems cs)
+    alreadyExists = B.search (_pbtree_index pKey) (Maybe.fromJust (insertRow M.! (_cname pKey)))
+    newCS = M.fromList $ L.map (\c -> if (isPrimary c) && (_cname c) == (_cname pKey)
+                                        then ((_cname c), c {_pbtree_index = B.insert (_pbtree_index c) (Maybe.fromJust (insertRow M.! (_cname pKey))) insertRow})
+                                        else ((_cname c), c)) (M.elems cs)
 
 data QueryResults = SelectResults [Row] | Success | Fail deriving (Show)
 data SetTo = SetToValue ColumnName (Maybe String) | SetToColumn ColumnName ColumnName
@@ -93,6 +176,30 @@ applyWhere r (WEq cname1 (Left cname2)) = rdata1 == rdata2
     where
       rdata1 = r M.! cname1
       rdata2 = r M.! cname2 
+
+collectWhere' :: Table -> WhereClause -> [Row]
+collectWhere' t@(Table cs _) (WAnd w1 w2) = (collectWhere' t w1) `L.intersect` (collectWhere' t w2)
+collectWhere' t@(Table cs _) (WOr w1 w2)  = (collectWhere' t w1) `L.union` (collectWhere' t w2)
+collectWhere' t@(Table cs rs) (WNot w1)  = L.filter (\r -> not (L.elem r matched)) rs
+    where 
+          matched = collectWhere' t w1
+
+collectWhere' (Table cs rs) (WEq cname (Right s)) = case (M.lookup cname cs) of
+                                                      Just c -> if (isPrimary c)
+                                                                  then case s of
+                                                                         Just s -> [Maybe.fromJust (B.search (_pbtree_index c) s)]
+                                                                         Nothing -> []
+                                                                  else L.filter (\r -> (r M.! cname) == s) rs
+                                                      Nothing -> error ("Column '" ++ (fromColumnName cname) ++ "' doesn't exists.")
+
+collectWhere' (Table cs rs) (WEq cname1 (Left cname2)) = case (M.lookup cname1 cs) of
+                                                          Just c -> case (M.lookup cname2 cs) of
+                                                                      Just c -> L.filter (\r -> (r M.! cname1) == (r M.! cname2)) rs
+                                                                      Nothing -> error ("Column '" ++ (fromColumnName cname2) ++ "' doesn't exits.")
+                                                          Nothing -> error ("Column '" ++ (fromColumnName cname1) ++ "' doesn't exits.")
+
+collectWhere :: Table -> WhereClause -> [Row]
+collectWhere = collectWhere'
 
 filterRow :: [Row] -> Maybe WhereClause -> [Row]
 filterRow rs w = case w of

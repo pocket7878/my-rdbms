@@ -6,13 +6,13 @@ import qualified Data.Map as M
 import qualified BTree as B
 import RDBMS 
 
-nameOption = ColumnOption (Just "Unnamed") False False
-emailOption = ColumnOption Nothing True True
+nameOption = ColumnOption Nothing False 
+emailOption = ColumnOption (Just (Just "unknown-email")) True 
 
 db :: DB
-db = createTable (emptyDB) "Student" (M.fromList [((ColumnName "name"), nameOption),
-                                                ((ColumnName "email"), emailOption),
-                                                ((ColumnName "sub-email"), defaultOption)])
+db = createTable (emptyDB) "Student" [mkPColumn (ColumnName "name") nameOption,
+                                     mkNColumn (ColumnName "email") emailOption,
+                                     mkNColumn (ColumnName "sub-email") defaultOption]
 
 query = (select "Student" [ColumnName "name", ColumnName "email"])
 
@@ -27,7 +27,7 @@ main :: IO ()
 main =  do 
            evalStateT (do {
                           insert "Student" (M.fromList [(ColumnName "name", Just "Satou"), (ColumnName "email", Just "hoge")]);
-                          insert "Student" (M.fromList [(ColumnName "email", Just "unnamed-user-email")]);
+                          insert "Student" (M.fromList [(ColumnName "name", Just "Takeru"), (ColumnName "email", Just "unnamed-user-email")]);
                           insert "Student" (M.fromList [(ColumnName "name", Just "Tanaka"), (ColumnName "email", Just "moge")]);
                           insert "Student" (M.fromList [(ColumnName "name", Just "Yamamoto"), (ColumnName "email", Just "yama"), (ColumnName "sub-email", Just "yama")]);
                           liftIO $ putStrLn "Before update";
